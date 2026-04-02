@@ -19289,6 +19289,17 @@ spec:
                           type: string
                       type: object
                   type: object
+                trafficGroup:
+                  properties:
+                    name:
+                      type: string
+                    trafficPercent:
+                      format: int32
+                      type: integer
+                  required:
+                    - name
+                    - trafficPercent
+                  type: object
                 transformer:
                   properties:
                     activeDeadlineSeconds:

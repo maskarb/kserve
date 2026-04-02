@@ -33,6 +33,25 @@ type InferenceServiceSpec struct {
 	// transformer service calls to predictor service.
 	// +optional
 	Transformer *TransformerSpec `json:"transformer,omitempty"`
+	// TrafficGroup groups multiple InferenceServices under a shared hostname
+	// with weighted traffic splitting via Gateway API HTTPRoute backends.
+	// +optional
+	TrafficGroup *TrafficGroupSpec `json:"trafficGroup,omitempty"`
+}
+
+// TrafficGroupSpec defines how this InferenceService participates in a traffic group.
+// All ISVCs with the same group Name share a single HTTPRoute and hostname.
+type TrafficGroupSpec struct {
+	// Name is the shared identity for the traffic group. It is used as the
+	// hostname prefix and HTTPRoute name. All ISVCs with the same group name
+	// are combined into a single weighted HTTPRoute.
+	// +required
+	Name string `json:"name"`
+	// TrafficPercent is the weight assigned to this ISVC in the group's HTTPRoute.
+	// Gateway API normalizes weights across all backends, so values do not need
+	// to sum to 100.
+	// +required
+	TrafficPercent int32 `json:"trafficPercent"`
 }
 
 // StorageSpec defines a spec for an object in an object store

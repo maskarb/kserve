@@ -854,6 +854,108 @@ func (r *RawHTTPRouteReconciler) reconcileHTTPRouteStatus(ctx context.Context, i
 	return ctrl.Result{}, nil
 }
 
+// reconcileTrafficGroupHTTPRoute creates a shared HTTPRoute for all ISVCs in the same traffic group.
+// Each ISVC contributes a weighted backend based on its trafficGroup.trafficPercent.
+func (r *RawHTTPRouteReconciler) reconcileTrafficGroupHTTPRoute(ctx context.Context, isvc *v1beta1.InferenceService) error {
+	groupName := isvc.Spec.TrafficGroup.Name
+
+	// List all ISVCs in the same namespace with the same traffic group
+	isvcList := &v1beta1.InferenceServiceList{}
+	if err := r.client.List(ctx, isvcList, client.InNamespace(isvc.Namespace)); err != nil {
+		return fmt.Errorf("failed to list InferenceServices for traffic group: %w", err)
+	}
+
+	// Build weighted backends from all group members that are predictor-ready
+	var backends []gwapiv1.HTTPBackendRef
+	for i := range isvcList.Items {
+		member := &isvcList.Items[i]
+		if member.Spec.TrafficGroup == nil || member.Spec.TrafficGroup.Name != groupName {
+			continue
+		}
+		if !member.Status.IsConditionReady(v1beta1.PredictorReady) {
+			continue
+		}
+		predictorName := constants.PredictorServiceName(member.Name)
+		weight := member.Spec.TrafficGroup.TrafficPercent
+		backends = append(backends, gwapiv1.HTTPBackendRef{
+			BackendRef: gwapiv1.BackendRef{
+				BackendObjectReference: gwapiv1.BackendObjectReference{
+					Kind:      ptr.To(gwapiv1.Kind(constants.ServiceKind)),
+					Name:      gwapiv1.ObjectName(predictorName),
+					Namespace: (*gwapiv1.Namespace)(&member.Namespace),
+					Port:      ptr.To(gwapiv1.PortNumber(constants.CommonDefaultHttpPort)),
+				},
+				Weight: &weight,
+			},
+		})
+	}
+
+	if len(backends) == 0 {
+		return nil
+	}
+
+	// Build the shared HTTPRoute
+	groupHost, err := GenerateDomainName(groupName, isvc.ObjectMeta, r.ingressConfig)
+	if err != nil {
+		return fmt.Errorf("failed to generate traffic group host: %w", err)
+	}
+
+	filters := []gwapiv1.HTTPRouteFilter{addIsvcHeaders(groupName, isvc.Namespace)}
+	routeMatch := []gwapiv1.HTTPRouteMatch{createHTTPRouteMatch(constants.FallbackPrefix())}
+
+	gatewaySlice := strings.Split(r.ingressConfig.KserveIngressGateway, "/")
+	desired := &gwapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      groupName,
+			Namespace: isvc.Namespace,
+		},
+		Spec: gwapiv1.HTTPRouteSpec{
+			Hostnames: []gwapiv1.Hostname{gwapiv1.Hostname(groupHost)},
+			Rules: []gwapiv1.HTTPRouteRule{
+				{
+					Matches:     routeMatch,
+					Filters:     filters,
+					BackendRefs: backends,
+					Timeouts: &gwapiv1.HTTPRouteTimeouts{
+						Request: DefaultTimeout,
+					},
+				},
+			},
+			CommonRouteSpec: gwapiv1.CommonRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{
+						Group:     (*gwapiv1.Group)(&gwapiv1.GroupVersion.Group),
+						Kind:      (*gwapiv1.Kind)(ptr.To(constants.GatewayKind)),
+						Namespace: (*gwapiv1.Namespace)(&gatewaySlice[0]),
+						Name:      gwapiv1.ObjectName(gatewaySlice[1]),
+					},
+				},
+			},
+		},
+	}
+
+	if err := controllerutil.SetControllerReference(isvc, desired, r.scheme); err != nil {
+		log.Info("Traffic group HTTPRoute controller reference not set (may be owned by another ISVC in the group)", "name", groupName)
+	}
+
+	// Create or update
+	existing := &gwapiv1.HTTPRoute{}
+	getErr := r.client.Get(ctx, types.NamespacedName{Name: groupName, Namespace: isvc.Namespace}, existing)
+	if getErr != nil && apierr.IsNotFound(getErr) {
+		log.Info("Creating traffic group HTTPRoute", "name", groupName)
+		return r.client.Create(ctx, desired)
+	} else if getErr != nil {
+		return fmt.Errorf("failed to get traffic group HTTPRoute: %w", getErr)
+	}
+
+	desired.ResourceVersion = existing.ResourceVersion
+	if !semanticHttpRouteEquals(desired, existing) {
+		log.Info("Updating traffic group HTTPRoute", "name", groupName, "backends", len(backends))
+		return r.client.Update(ctx, desired)
+	}
+	return nil
+}
+
 // ReconcileHTTPRoute reconciles the HTTPRoute resource
 func (r *RawHTTPRouteReconciler) Reconcile(ctx context.Context, isvc *v1beta1.InferenceService) (ctrl.Result, error) {
 	var err error
@@ -866,36 +968,49 @@ func (r *RawHTTPRouteReconciler) Reconcile(ctx context.Context, isvc *v1beta1.In
 		isInternal = true
 	}
 	if !isInternal && !r.ingressConfig.DisableIngressCreation {
-		if err := r.reconcilePredictorHTTPRoute(ctx, isvc); err != nil {
-			return ctrl.Result{}, err
-		}
-		if isvc.Spec.Transformer != nil {
-			if err := r.reconcileTransformerHTTPRoute(ctx, isvc); err != nil {
+		// If this ISVC is part of a traffic group, reconcile the shared HTTPRoute
+		// instead of individual predictor/top-level routes.
+		if isvc.Spec.TrafficGroup != nil {
+			if err := r.reconcileTrafficGroupHTTPRoute(ctx, isvc); err != nil {
 				return ctrl.Result{}, err
 			}
-		}
-		if isvc.Spec.Explainer != nil {
-			if err := r.reconcileExplainerHTTPRoute(ctx, isvc); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-		if err := r.reconcileTopLevelHTTPRoute(ctx, isvc); err != nil {
-			return ctrl.Result{}, err
-		}
-
-		if utils.GetForceStopRuntime(isvc) {
+			// Set ingress ready — the traffic group HTTPRoute handles routing
 			isvc.Status.SetCondition(v1beta1.IngressReady, &knapis.Condition{
 				Type:   v1beta1.IngressReady,
-				Status: corev1.ConditionFalse,
-				Reason: v1beta1.StoppedISVCReason,
+				Status: corev1.ConditionTrue,
 			})
+		} else {
+			if err := r.reconcilePredictorHTTPRoute(ctx, isvc); err != nil {
+				return ctrl.Result{}, err
+			}
+			if isvc.Spec.Transformer != nil {
+				if err := r.reconcileTransformerHTTPRoute(ctx, isvc); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			if isvc.Spec.Explainer != nil {
+				if err := r.reconcileExplainerHTTPRoute(ctx, isvc); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			if err := r.reconcileTopLevelHTTPRoute(ctx, isvc); err != nil {
+				return ctrl.Result{}, err
+			}
 
-			return ctrl.Result{}, nil
-		}
+			if utils.GetForceStopRuntime(isvc) {
+				isvc.Status.SetCondition(v1beta1.IngressReady, &knapis.Condition{
+					Type:   v1beta1.IngressReady,
+					Status: corev1.ConditionFalse,
+					Reason: v1beta1.StoppedISVCReason,
+				})
 
-		// Check HTTPRoute statuses for all components
-		if result, err := r.reconcileHTTPRouteStatus(ctx, isvc); err != nil || result.Requeue {
-			return result, err
+				return ctrl.Result{}, nil
+			}
+
+			// Check HTTPRoute statuses for all components
+			if result, err := r.reconcileHTTPRouteStatus(ctx, isvc); err != nil || result.Requeue {
+				return result, err
+			}
 		}
 	} else {
 		// Ingress creation is disabled. We set it to true as the isvc condition depends on it.

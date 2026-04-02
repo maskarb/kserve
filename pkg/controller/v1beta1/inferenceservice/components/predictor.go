@@ -386,8 +386,15 @@ func (p *Predictor) buildPodSpec(isvc *v1beta1.InferenceService, sRuntime v1alph
 		return podSpec, err
 	}
 
-	// Replace placeholders in runtime container by values from inferenceservice metadata
-	if err = isvcutils.ReplacePlaceholders(predContainer, isvc.ObjectMeta); err != nil {
+	// Replace placeholders in runtime container by values from inferenceservice metadata.
+	// If the ISVC is part of a traffic group, use the group name as the model name
+	// so all group members serve under the same model identity.
+	placeholderMeta := isvc.ObjectMeta
+	if isvc.Spec.TrafficGroup != nil {
+		placeholderMeta = *isvc.ObjectMeta.DeepCopy()
+		placeholderMeta.Name = isvc.Spec.TrafficGroup.Name
+	}
+	if err = isvcutils.ReplacePlaceholders(predContainer, placeholderMeta); err != nil {
 		isvc.Status.UpdateModelTransitionStatus(v1beta1.InvalidSpec, &v1beta1.FailureInfo{
 			Reason:  v1beta1.InvalidPredictorSpec,
 			Message: fmt.Sprintf(ErrInvalidPlaceholder, *isvc.Spec.Predictor.Model.Runtime, predContainer.Name),
