@@ -41,6 +41,7 @@ import (
 	"github.com/kserve/kserve/pkg/apis/serving/v1beta1"
 	"github.com/kserve/kserve/pkg/constants"
 	graphcontroller "github.com/kserve/kserve/pkg/controller/v1alpha1/inferencegraph"
+	itscontroller "github.com/kserve/kserve/pkg/controller/v1alpha1/inferencetrafficsplit"
 	trainedmodelcontroller "github.com/kserve/kserve/pkg/controller/v1alpha1/trainedmodel"
 	"github.com/kserve/kserve/pkg/controller/v1alpha1/trainedmodel/reconcilers/modelconfig"
 	v1beta1controller "github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice"
@@ -214,6 +215,18 @@ func main() {
 		Recorder:  eventBroadcaster.NewRecorder(mgr.GetScheme(), corev1.EventSource{Component: "InferenceGraphController"}),
 	}).SetupWithManager(mgr, deployConfig); err != nil {
 		setupLog.Error(err, "unable to create controller", "v1alpha1Controllers", "InferenceGraph")
+		os.Exit(1)
+	}
+
+	// Setup InferenceTrafficSplit controller
+	setupLog.Info("Setting up InferenceTrafficSplit controller")
+	if err = (&itscontroller.InferenceTrafficSplitReconciler{
+		Client:        mgr.GetClient(),
+		Log:           ctrl.Log.WithName("v1alpha1Controllers").WithName("InferenceTrafficSplit"),
+		Scheme:        mgr.GetScheme(),
+		IngressConfig: ingressConfig,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "v1alpha1Controllers", "InferenceTrafficSplit")
 		os.Exit(1)
 	}
 

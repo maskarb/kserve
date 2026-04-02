@@ -196,6 +196,8 @@ rules:
   - inferencegraphs/finalizers
   - inferenceservices
   - inferenceservices/finalizers
+  - inferencetrafficsplits
+  - inferencetrafficsplits/finalizers
   - servingruntimes
   - servingruntimes/finalizers
   - trainedmodels
@@ -213,6 +215,7 @@ rules:
   - clusterservingruntimes/status
   - inferencegraphs/status
   - inferenceservices/status
+  - inferencetrafficsplits/status
   - servingruntimes/status
   - trainedmodels/status
   verbs:

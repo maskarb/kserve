@@ -173,6 +173,7 @@ var (
 
 // kserve networking constants
 const (
+	TrafficSplitLabel      = "serving.kserve.io/traffic-split"
 	NetworkVisibility      = "networking.kserve.io/visibility"
 	ClusterLocalVisibility = "cluster-local"
 	ClusterLocalDomain     = "svc.cluster.local"

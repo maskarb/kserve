@@ -865,6 +865,23 @@ func (r *RawHTTPRouteReconciler) Reconcile(ctx context.Context, isvc *v1beta1.In
 	if r.ingressConfig.IngressDomain == constants.ClusterLocalDomain {
 		isInternal = true
 	}
+	// If this ISVC is managed by an InferenceTrafficSplit, skip individual HTTPRoute creation.
+	// Traffic routing is handled by the ITS controller's shared HTTPRoute.
+	if _, ok := isvc.Labels[constants.TrafficSplitLabel]; ok {
+		isvc.Status.SetCondition(v1beta1.IngressReady, &knapis.Condition{
+			Type:   v1beta1.IngressReady,
+			Status: corev1.ConditionTrue,
+		})
+		if isvc.Status.URL, err = createRawURL(isvc, r.ingressConfig); err != nil {
+			return ctrl.Result{}, err
+		}
+		isvc.Status.Address, err = createAddress(ctx, r.client, isvc, r.ingressConfig)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
 	if !isInternal && !r.ingressConfig.DisableIngressCreation {
 		if err := r.reconcilePredictorHTTPRoute(ctx, isvc); err != nil {
 			return ctrl.Result{}, err
