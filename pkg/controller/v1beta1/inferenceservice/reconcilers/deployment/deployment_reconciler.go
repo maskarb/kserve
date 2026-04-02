@@ -123,6 +123,14 @@ func createRawDeployment(componentMeta metav1.ObjectMeta, workerComponentMeta me
 	}
 	deploymentList = append(deploymentList, defaultDeployment)
 
+	// Canary deployment for traffic splitting
+	if componentExt != nil && componentExt.CanaryTrafficPercent != nil && *componentExt.CanaryTrafficPercent > 0 {
+		canaryMeta := *componentMeta.DeepCopy()
+		canaryMeta.Name = componentMeta.Name + "-canary"
+		canaryDeployment := createRawDefaultDeployment(canaryMeta, componentExt, podSpec.DeepCopy(), deployConfig)
+		deploymentList = append(deploymentList, canaryDeployment)
+	}
+
 	// workerNode deployment
 	if multiNodeEnabled {
 		workerDeployment := createRawWorkerDeployment(workerComponentMeta, componentExt, workerPodSpec, componentMeta.Name, workerNodeReplicas, deployConfig)

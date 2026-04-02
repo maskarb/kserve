@@ -149,6 +149,41 @@ func createHTTPRouteRule(routeMatches []gwapiv1.HTTPRouteMatch, filters []gwapiv
 	}
 }
 
+// WeightedBackend represents a service backend with a traffic weight for canary splitting
+type WeightedBackend struct {
+	ServiceName string
+	Weight      int32
+}
+
+// createWeightedHTTPRouteRule creates an HTTPRoute rule with multiple weighted backends for canary traffic splitting
+func createWeightedHTTPRouteRule(routeMatches []gwapiv1.HTTPRouteMatch, filters []gwapiv1.HTTPRouteFilter,
+	namespace string, port int32, timeout *gwapiv1.Duration, backends []WeightedBackend,
+) gwapiv1.HTTPRouteRule {
+	var backendRefs []gwapiv1.HTTPBackendRef
+	for _, backend := range backends {
+		weight := backend.Weight
+		backendRefs = append(backendRefs, gwapiv1.HTTPBackendRef{
+			BackendRef: gwapiv1.BackendRef{
+				BackendObjectReference: gwapiv1.BackendObjectReference{
+					Kind:      ptr.To(gwapiv1.Kind(constants.ServiceKind)),
+					Name:      gwapiv1.ObjectName(backend.ServiceName),
+					Namespace: (*gwapiv1.Namespace)(&namespace),
+					Port:      &port,
+				},
+				Weight: &weight,
+			},
+		})
+	}
+	return gwapiv1.HTTPRouteRule{
+		Matches:     routeMatches,
+		Filters:     filters,
+		BackendRefs: backendRefs,
+		Timeouts: &gwapiv1.HTTPRouteTimeouts{
+			Request: timeout,
+		},
+	}
+}
+
 func createRawPredictorHTTPRoute(isvc *v1beta1.InferenceService, ingressConfig *v1beta1.IngressConfig,
 	isvcConfig *v1beta1.InferenceServicesConfig,
 ) (*gwapiv1.HTTPRoute, error) {
@@ -179,7 +214,20 @@ func createRawPredictorHTTPRoute(isvc *v1beta1.InferenceService, ingressConfig *
 	if isvc.Spec.Predictor.TimeoutSeconds != nil {
 		timeout = toGatewayAPIDuration(*isvc.Spec.Predictor.TimeoutSeconds)
 	}
-	httpRouteRules = append(httpRouteRules, createHTTPRouteRule(routeMatch, filters, predictorName, isvc.Namespace, constants.CommonDefaultHttpPort, timeout))
+	// Check if canary traffic splitting is configured
+	predictorExt := isvc.Spec.Predictor.GetExtensions()
+	if predictorExt != nil && predictorExt.CanaryTrafficPercent != nil && *predictorExt.CanaryTrafficPercent > 0 {
+		canaryPercent := int32(*predictorExt.CanaryTrafficPercent)
+		canaryName := constants.CanaryPredictorServiceName(isvc.Name)
+		backends := []WeightedBackend{
+			{ServiceName: predictorName, Weight: 100 - canaryPercent},
+			{ServiceName: canaryName, Weight: canaryPercent},
+		}
+		httpRouteRules = append(httpRouteRules, createWeightedHTTPRouteRule(routeMatch, filters,
+			isvc.Namespace, constants.CommonDefaultHttpPort, timeout, backends))
+	} else {
+		httpRouteRules = append(httpRouteRules, createHTTPRouteRule(routeMatch, filters, predictorName, isvc.Namespace, constants.CommonDefaultHttpPort, timeout))
+	}
 
 	annotations := utils.Filter(isvc.Annotations, func(key string) bool {
 		return !utils.Includes(isvcConfig.ServiceAnnotationDisallowedList, key)
@@ -429,7 +477,21 @@ func createRawTopLevelHTTPRoute(isvc *v1beta1.InferenceService, ingressConfig *v
 		}
 		// Add toplevel host rules for predictor which routes all traffic to predictor
 		routeMatch := []gwapiv1.HTTPRouteMatch{createHTTPRouteMatch(constants.FallbackPrefix())}
-		httpRouteRules = append(httpRouteRules, createHTTPRouteRule(routeMatch, filters, predictorName, isvc.Namespace, constants.CommonDefaultHttpPort, timeout))
+
+		// Use weighted backends if canary traffic splitting is configured
+		predictorExt := isvc.Spec.Predictor.GetExtensions()
+		if predictorExt != nil && predictorExt.CanaryTrafficPercent != nil && *predictorExt.CanaryTrafficPercent > 0 {
+			canaryPercent := int32(*predictorExt.CanaryTrafficPercent)
+			canaryName := constants.CanaryPredictorServiceName(isvc.Name)
+			backends := []WeightedBackend{
+				{ServiceName: predictorName, Weight: 100 - canaryPercent},
+				{ServiceName: canaryName, Weight: canaryPercent},
+			}
+			httpRouteRules = append(httpRouteRules, createWeightedHTTPRouteRule(routeMatch, filters,
+				isvc.Namespace, constants.CommonDefaultHttpPort, timeout, backends))
+		} else {
+			httpRouteRules = append(httpRouteRules, createHTTPRouteRule(routeMatch, filters, predictorName, isvc.Namespace, constants.CommonDefaultHttpPort, timeout))
+		}
 	}
 
 	// Add path based routing rules

@@ -95,6 +95,14 @@ func createService(componentMeta metav1.ObjectMeta, componentExt *v1beta1.Compon
 		// If multiNodeEnabled is false, only defaultSvc will be created.
 		defaultSvc := createDefaultSvc(componentMeta, componentExt, podSpec, serviceConfig)
 		svcList = append(svcList, defaultSvc)
+
+		// Create canary service for traffic splitting
+		if componentExt != nil && componentExt.CanaryTrafficPercent != nil && *componentExt.CanaryTrafficPercent > 0 {
+			canaryMeta := *componentMeta.DeepCopy()
+			canaryMeta.Name = componentMeta.Name + "-canary"
+			canarySvc := createDefaultSvc(canaryMeta, componentExt, podSpec, serviceConfig)
+			svcList = append(svcList, canarySvc)
+		}
 	} else if multiNodeEnabled && !isWorkerContainer {
 		// If multiNodeEnabled is true, both defaultSvc and headSvc will be created.
 		defaultSvc := createDefaultSvc(componentMeta, componentExt, podSpec, serviceConfig)

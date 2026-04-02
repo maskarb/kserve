@@ -25,6 +25,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -749,7 +750,15 @@ func (p *Predictor) reconcileRawDeployment(ctx context.Context, isvc *v1beta1.In
 	}
 
 	if !utils.GetForceStopRuntime(isvc) {
-		isvc.Status.PropagateRawStatus(v1beta1.PredictorComponent, deploymentList, r.URL)
+		// Filter out canary deployments from status propagation —
+		// only the default deployment's status should drive PredictorReady.
+		var statusDeployments []*appsv1.Deployment
+		for _, d := range deploymentList {
+			if !strings.HasSuffix(d.Name, "-canary") {
+				statusDeployments = append(statusDeployments, d)
+			}
+		}
+		isvc.Status.PropagateRawStatus(v1beta1.PredictorComponent, statusDeployments, r.URL)
 	}
 
 	return nil
