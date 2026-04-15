@@ -204,6 +204,11 @@ func (r *LLMISVCReconciler) expectedHTTPRoute(ctx context.Context, llmSvc *v1alp
 		httpRoute.Spec = *llmSvc.Spec.Router.Route.HTTP.Spec.DeepCopy()
 	}
 
+	// Apply traffic splits if configured
+	if llmSvc.Spec.Router != nil && llmSvc.Spec.Router.Route != nil && len(llmSvc.Spec.Router.Route.Splits) > 0 {
+		r.applyTrafficSplits(ctx, llmSvc, httpRoute)
+	}
+
 	// Migration logic: check if we should switch from v1alpha2 to v1 InferencePool
 	// Only applies to managed routes with a scheduler (not using external pool refs)
 	if llmSvc.Spec.Router == nil || llmSvc.Spec.Router.Scheduler == nil ||
@@ -275,6 +280,72 @@ func (r *LLMISVCReconciler) expectedHTTPRoute(ctx context.Context, llmSvc *v1alp
 	}
 
 	return httpRoute
+}
+
+// backendSuffix returns the resource name suffix for a given backend kind.
+// InferencePool backends use "-inference-pool", Service backends use "-kserve-workload-svc".
+func backendSuffix(backendRef gwapiv1.HTTPBackendRef) string {
+	if backendRef.Kind != nil && string(*backendRef.Kind) == "InferencePool" {
+		return "-inference-pool"
+	}
+	return "-kserve-workload-svc"
+}
+
+// applyTrafficSplits modifies the HTTPRoute's backend refs to include weighted
+// backends for traffic splitting across multiple LLMInferenceService instances.
+//
+// For each rule, this examines the existing backendRef to determine the backend
+// kind (InferencePool or Service), then adds weighted backends for each split
+// member using the same kind, group, and port. Path matches, URL rewrites, and
+// timeouts are preserved.
+func (r *LLMISVCReconciler) applyTrafficSplits(ctx context.Context, llmSvc *v1alpha2.LLMInferenceService, httpRoute *gwapiv1.HTTPRoute) {
+	logger := log.FromContext(ctx)
+	splits := llmSvc.Spec.Router.Route.Splits
+
+	for i := range httpRoute.Spec.Rules {
+		rule := &httpRoute.Spec.Rules[i]
+		if len(rule.BackendRefs) == 0 {
+			continue
+		}
+
+		// Use the first existing backendRef as the template — it has the correct
+		// kind, group, port, and namespace for this rule.
+		template := rule.BackendRefs[0]
+		suffix := backendSuffix(template)
+
+		var weightedBackends []gwapiv1.HTTPBackendRef
+		for _, split := range splits {
+			var name string
+			if split.Ref == nil {
+				// Self reference — use current llmisvc's resource name
+				name = kmeta.ChildName(llmSvc.GetName(), suffix)
+			} else {
+				// External reference — derive from the ref name
+				name = kmeta.ChildName(split.Ref.Name, suffix)
+			}
+
+			weight := split.Weight
+			backend := gwapiv1.HTTPBackendRef{
+				BackendRef: gwapiv1.BackendRef{
+					BackendObjectReference: gwapiv1.BackendObjectReference{
+						Group: template.Group,
+						Kind:  template.Kind,
+						Name:  gwapiv1.ObjectName(name),
+						Port:  template.Port,
+					},
+					Weight: &weight,
+				},
+			}
+			if template.Namespace != nil {
+				backend.Namespace = template.Namespace
+			}
+			weightedBackends = append(weightedBackends, backend)
+		}
+
+		rule.BackendRefs = weightedBackends
+	}
+
+	logger.Info("Applied per-rule traffic splits to HTTPRoute", "rules", len(httpRoute.Spec.Rules), "splits", len(splits))
 }
 
 func (r *LLMISVCReconciler) updateRoutingStatus(ctx context.Context, llmSvc *v1alpha2.LLMInferenceService, routes ...*gwapiv1.HTTPRoute) error {

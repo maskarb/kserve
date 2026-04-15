@@ -1,0 +1,105 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"serving.kserve.io/v1alpha2","kind":"LLMInferenceService","metadata":{"annotations":{},"name":"my-llm-v2","namespace":"test-llm-canary"},"spec":{"model":{"uri":"gs://kfserving-examples/models/sklearn/1.0/model"},"replicas":1,"router":{"route":{"http":{"spec":{"hostnames":["my-llm-v2.example.com"],"parentRefs":[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"kserve-ingress-gateway","namespace":"kserve"}],"rules":[{"backendRefs":[{"kind":"Service","name":"my-llm-v2-kserve-workload-svc","port":80}],"matches":[{"path":{"type":"PathPrefix","value":"/"}}]}]}}}},"storageInitializer":{"enabled":false},"template":{"containers":[{"args":["--model_name=my-llm","--model_dir=/mnt/models","--http_port=8080"],"image":"docker.io/kserve/sklearnserver:v0.15.0","name":"server","ports":[{"containerPort":8080,"protocol":"TCP"}],"resources":{"limits":{"cpu":"500m","memory":"1Gi"},"requests":{"cpu":"100m","memory":"512Mi"}}}]}}}
+  creationTimestamp: "2026-04-15T18:00:19Z"
+  finalizers:
+  - serving.kserve.io/llmisvc-finalizer
+  generation: 1
+  name: my-llm-v2
+  namespace: test-llm-canary
+  resourceVersion: "1710"
+  uid: 181fb168-82f8-4fd6-9789-b3732d81c858
+spec:
+  model:
+    uri: gs://kfserving-examples/models/sklearn/1.0/model
+  replicas: 1
+  router:
+    route:
+      http:
+        spec:
+          hostnames:
+          - my-llm-v2.example.com
+          parentRefs:
+          - group: gateway.networking.k8s.io
+            kind: Gateway
+            name: kserve-ingress-gateway
+            namespace: kserve
+          rules:
+          - backendRefs:
+            - group: ""
+              kind: Service
+              name: my-llm-v2-kserve-workload-svc
+              port: 80
+              weight: 1
+            matches:
+            - path:
+                type: PathPrefix
+                value: /
+  storageInitializer:
+    enabled: false
+  template:
+    containers:
+    - args:
+      - --model_name=my-llm
+      - --model_dir=/mnt/models
+      - --http_port=8080
+      image: docker.io/kserve/sklearnserver:v0.15.0
+      name: server
+      ports:
+      - containerPort: 8080
+        protocol: TCP
+      resources:
+        limits:
+          cpu: 500m
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+status:
+  annotations:
+    serving.kserve.io/config-llm-decode-template: kserve-config-llm-decode-template
+    serving.kserve.io/config-llm-decode-worker-data-parallel: kserve-config-llm-decode-worker-data-parallel
+    serving.kserve.io/config-llm-prefill-template: kserve-config-llm-prefill-template
+    serving.kserve.io/config-llm-prefill-worker-data-parallel: kserve-config-llm-prefill-worker-data-parallel
+    serving.kserve.io/config-llm-router-route: kserve-config-llm-router-route
+    serving.kserve.io/config-llm-scheduler: kserve-config-llm-scheduler
+    serving.kserve.io/config-llm-template: kserve-config-llm-template
+    serving.kserve.io/config-llm-worker-data-parallel: kserve-config-llm-worker-data-parallel
+  conditions:
+  - lastTransitionTime: "2026-04-15T18:00:37Z"
+    message: 'The following HTTPRoutes are not ready: [test-llm-canary/my-llm-v2-kserve-route:
+      "False" (reason "PortNotFound", message "Failed to process route rule 0 backendRef
+      0: TCP Port 80 not found on Service test-llm-canary/my-llm-v2-kserve-workload-svc.")]'
+    reason: HTTPRoutesNotReady
+    severity: Info
+    status: "False"
+    type: HTTPRoutesReady
+  - lastTransitionTime: "2026-04-15T18:00:41Z"
+    severity: Info
+    status: "True"
+    type: MainWorkloadReady
+  - lastTransitionTime: "2026-04-15T18:00:37Z"
+    severity: Info
+    status: "True"
+    type: PresetsCombined
+  - lastTransitionTime: "2026-04-15T18:00:37Z"
+    message: 'The following HTTPRoutes are not ready: [test-llm-canary/my-llm-v2-kserve-route:
+      "False" (reason "PortNotFound", message "Failed to process route rule 0 backendRef
+      0: TCP Port 80 not found on Service test-llm-canary/my-llm-v2-kserve-workload-svc.")]'
+    reason: HTTPRoutesNotReady
+    status: "False"
+    type: Ready
+  - lastTransitionTime: "2026-04-15T18:00:37Z"
+    message: 'The following HTTPRoutes are not ready: [test-llm-canary/my-llm-v2-kserve-route:
+      "False" (reason "PortNotFound", message "Failed to process route rule 0 backendRef
+      0: TCP Port 80 not found on Service test-llm-canary/my-llm-v2-kserve-workload-svc.")]'
+    reason: HTTPRoutesNotReady
+    status: "False"
+    type: RouterReady
+  - lastTransitionTime: "2026-04-15T18:00:41Z"
+    status: "True"
+    type: WorkloadsReady
+  observedGeneration: 1

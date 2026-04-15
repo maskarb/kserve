@@ -9542,6 +9542,23 @@ spec:
                                 type: string
                             type: object
                         type: object
+                      splits:
+                        items:
+                          properties:
+                            ref:
+                              properties:
+                                name:
+                                  default: ""
+                                  type: string
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            weight:
+                              format: int32
+                              type: integer
+                          required:
+                          - weight
+                          type: object
+                        type: array
                     type: object
                   scheduler:
                     properties:

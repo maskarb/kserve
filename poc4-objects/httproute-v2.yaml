@@ -1,0 +1,61 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  creationTimestamp: "2026-04-15T18:00:37Z"
+  generation: 1
+  labels:
+    app.kubernetes.io/component: llminferenceservice-router
+    app.kubernetes.io/name: my-llm-v2
+    app.kubernetes.io/part-of: llminferenceservice
+  name: my-llm-v2-kserve-route
+  namespace: test-llm-canary
+  ownerReferences:
+  - apiVersion: serving.kserve.io/v1alpha2
+    blockOwnerDeletion: true
+    controller: true
+    kind: LLMInferenceService
+    name: my-llm-v2
+    uid: 181fb168-82f8-4fd6-9789-b3732d81c858
+  resourceVersion: "1674"
+  uid: 1d2b0c5b-026d-4685-b840-1888283c2066
+spec:
+  hostnames:
+  - my-llm-v2.example.com
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: kserve-ingress-gateway
+    namespace: kserve
+  rules:
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: my-llm-v2-kserve-workload-svc
+      port: 80
+      weight: 1
+    matches:
+    - path:
+        type: PathPrefix
+        value: /
+status:
+  parents:
+  - conditions:
+    - lastTransitionTime: "2026-04-15T18:00:37Z"
+      message: Route is accepted
+      observedGeneration: 1
+      reason: Accepted
+      status: "True"
+      type: Accepted
+    - lastTransitionTime: "2026-04-15T18:00:37Z"
+      message: 'Failed to process route rule 0 backendRef 0: TCP Port 80 not found
+        on Service test-llm-canary/my-llm-v2-kserve-workload-svc.'
+      observedGeneration: 1
+      reason: PortNotFound
+      status: "False"
+      type: ResolvedRefs
+    controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    parentRef:
+      group: gateway.networking.k8s.io
+      kind: Gateway
+      name: kserve-ingress-gateway
+      namespace: kserve

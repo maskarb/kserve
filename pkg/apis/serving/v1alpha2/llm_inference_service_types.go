@@ -227,6 +227,24 @@ type GatewayRoutesSpec struct {
 	// HTTP route configuration.
 	// +optional
 	HTTP *HTTPRouteSpec `json:"http,omitempty"`
+
+	// Splits defines weighted traffic splitting across multiple LLMInferenceService
+	// instances sharing this route. When configured, the controller modifies the
+	// HTTPRoute to include weighted backends for each referenced service.
+	// +optional
+	Splits []TrafficSplit `json:"splits,omitempty"`
+}
+
+// TrafficSplit defines a weighted backend for traffic splitting.
+type TrafficSplit struct {
+	// Ref references another LLMInferenceService by name in the same namespace.
+	// If omitted, this entry refers to the current (self) service.
+	// +optional
+	Ref *corev1.LocalObjectReference `json:"ref,omitempty"`
+	// Weight is the traffic weight for this backend. Gateway API normalizes
+	// weights across all backends, so values do not need to sum to 100.
+	// +required
+	Weight int32 `json:"weight"`
 }
 
 // HTTPRouteSpec defines configurations for a Gateway API HTTPRoute.

@@ -1,0 +1,126 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  annotations:
+    serving.kserve.io/inference-pool-migrated: v1
+  creationTimestamp: "2026-04-15T19:26:19Z"
+  generation: 2
+  labels:
+    app.kubernetes.io/component: llminferenceservice-router
+    app.kubernetes.io/name: facebook-opt-125m-single
+    app.kubernetes.io/part-of: llminferenceservice
+  name: facebook-opt-125m-single-kserve-route
+  namespace: llm-demo
+  ownerReferences:
+  - apiVersion: serving.kserve.io/v1alpha2
+    blockOwnerDeletion: true
+    controller: true
+    kind: LLMInferenceService
+    name: facebook-opt-125m-single
+    uid: ea454eff-8da2-4748-88d2-b5007cc22df7
+  resourceVersion: "3156"
+  uid: 901287cc-b5fc-469c-bec6-31bebd814b30
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: kserve-ingress-gateway
+    namespace: kserve
+  rules:
+  - backendRefs:
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: facebook-opt-125m-single-inference-pool
+      port: 8000
+      weight: 1
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          replacePrefixMatch: /v1/completions
+          type: ReplacePrefixMatch
+    matches:
+    - path:
+        type: PathPrefix
+        value: /llm-demo/facebook-opt-125m-single/v1/completions
+    timeouts:
+      backendRequest: 0s
+      request: 0s
+  - backendRefs:
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: facebook-opt-125m-single-inference-pool
+      port: 8000
+      weight: 1
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          replacePrefixMatch: /v1/chat/completions
+          type: ReplacePrefixMatch
+    matches:
+    - path:
+        type: PathPrefix
+        value: /llm-demo/facebook-opt-125m-single/v1/chat/completions
+    timeouts:
+      backendRequest: 0s
+      request: 0s
+  - backendRefs:
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: facebook-opt-125m-single-inference-pool
+      port: 8000
+      weight: 1
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          replacePrefixMatch: /v1/responses
+          type: ReplacePrefixMatch
+    matches:
+    - path:
+        type: PathPrefix
+        value: /llm-demo/facebook-opt-125m-single/v1/responses
+    timeouts:
+      backendRequest: 0s
+      request: 0s
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: facebook-opt-125m-single-kserve-workload-svc
+      port: 8000
+      weight: 1
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          replacePrefixMatch: /
+          type: ReplacePrefixMatch
+    matches:
+    - path:
+        type: PathPrefix
+        value: /llm-demo/facebook-opt-125m-single
+    timeouts:
+      backendRequest: 0s
+      request: 0s
+status:
+  parents:
+  - conditions:
+    - lastTransitionTime: "2026-04-15T19:26:23Z"
+      message: Route is accepted
+      observedGeneration: 2
+      reason: Accepted
+      status: "True"
+      type: Accepted
+    - lastTransitionTime: "2026-04-15T19:26:23Z"
+      message: Resolved all the Object references for the Route
+      observedGeneration: 2
+      reason: ResolvedRefs
+      status: "True"
+      type: ResolvedRefs
+    controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    parentRef:
+      group: gateway.networking.k8s.io
+      kind: Gateway
+      name: kserve-ingress-gateway
+      namespace: kserve

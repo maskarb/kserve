@@ -1,0 +1,67 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  creationTimestamp: "2026-04-15T18:00:26Z"
+  generation: 2
+  labels:
+    app.kubernetes.io/component: llminferenceservice-router
+    app.kubernetes.io/name: my-llm-v1
+    app.kubernetes.io/part-of: llminferenceservice
+  name: my-llm-v1-kserve-route
+  namespace: test-llm-canary
+  ownerReferences:
+  - apiVersion: serving.kserve.io/v1alpha2
+    blockOwnerDeletion: true
+    controller: true
+    kind: LLMInferenceService
+    name: my-llm-v1
+    uid: 858d9bb5-6928-4aa9-8629-f60ef2102d93
+  resourceVersion: "1705"
+  uid: bd3f5720-73b2-47f6-80a6-536646b13802
+spec:
+  hostnames:
+  - my-llm.example.com
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: kserve-ingress-gateway
+    namespace: kserve
+  rules:
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: my-llm-v1-kserve-workload-svc
+      namespace: test-llm-canary
+      port: 8000
+      weight: 80
+    - group: ""
+      kind: Service
+      name: my-llm-v2-kserve-workload-svc
+      namespace: test-llm-canary
+      port: 8000
+      weight: 20
+    matches:
+    - path:
+        type: PathPrefix
+        value: /
+status:
+  parents:
+  - conditions:
+    - lastTransitionTime: "2026-04-15T18:00:40Z"
+      message: Route is accepted
+      observedGeneration: 2
+      reason: Accepted
+      status: "True"
+      type: Accepted
+    - lastTransitionTime: "2026-04-15T18:00:40Z"
+      message: Resolved all the Object references for the Route
+      observedGeneration: 2
+      reason: ResolvedRefs
+      status: "True"
+      type: ResolvedRefs
+    controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    parentRef:
+      group: gateway.networking.k8s.io
+      kind: Gateway
+      name: kserve-ingress-gateway
+      namespace: kserve
