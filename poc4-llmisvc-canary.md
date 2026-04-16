@@ -252,6 +252,148 @@ INFERENCEPOOLS:
 Each llmisvc independently owns its Deployment, Service, InferencePool,
 and Scheduler. The splits only affect the stable llmisvc's HTTPRoute.
 
+### Output: Full HTTPRoute YAML
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  annotations:
+    serving.kserve.io/inference-pool-migrated: v1
+  labels:
+    app.kubernetes.io/component: llminferenceservice-router
+    app.kubernetes.io/name: facebook-opt-125m-single
+    app.kubernetes.io/part-of: llminferenceservice
+  name: facebook-opt-125m-single-kserve-route
+  namespace: llm-demo
+  ownerReferences:
+  - apiVersion: serving.kserve.io/v1alpha2
+    blockOwnerDeletion: true
+    controller: true
+    kind: LLMInferenceService
+    name: facebook-opt-125m-single
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: kserve-ingress-gateway
+    namespace: kserve
+  rules:
+  - backendRefs:
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: facebook-opt-125m-single-inference-pool
+      port: 8000
+      weight: 80
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: facebook-opt-125m-canary-inference-pool
+      port: 8000
+      weight: 20
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          replacePrefixMatch: /v1/completions
+          type: ReplacePrefixMatch
+    matches:
+    - path:
+        type: PathPrefix
+        value: /llm-demo/facebook-opt-125m-single/v1/completions
+    timeouts:
+      backendRequest: 0s
+      request: 0s
+  - backendRefs:
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: facebook-opt-125m-single-inference-pool
+      port: 8000
+      weight: 80
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: facebook-opt-125m-canary-inference-pool
+      port: 8000
+      weight: 20
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          replacePrefixMatch: /v1/chat/completions
+          type: ReplacePrefixMatch
+    matches:
+    - path:
+        type: PathPrefix
+        value: /llm-demo/facebook-opt-125m-single/v1/chat/completions
+    timeouts:
+      backendRequest: 0s
+      request: 0s
+  - backendRefs:
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: facebook-opt-125m-single-inference-pool
+      port: 8000
+      weight: 80
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: facebook-opt-125m-canary-inference-pool
+      port: 8000
+      weight: 20
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          replacePrefixMatch: /v1/responses
+          type: ReplacePrefixMatch
+    matches:
+    - path:
+        type: PathPrefix
+        value: /llm-demo/facebook-opt-125m-single/v1/responses
+    timeouts:
+      backendRequest: 0s
+      request: 0s
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: facebook-opt-125m-single-kserve-workload-svc
+      port: 8000
+      weight: 80
+    - group: ""
+      kind: Service
+      name: facebook-opt-125m-canary-kserve-workload-svc
+      port: 8000
+      weight: 20
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          replacePrefixMatch: /
+          type: ReplacePrefixMatch
+    matches:
+    - path:
+        type: PathPrefix
+        value: /llm-demo/facebook-opt-125m-single
+    timeouts:
+      backendRequest: 0s
+      request: 0s
+status:
+  parents:
+  - conditions:
+    - message: Route is accepted
+      reason: Accepted
+      status: "True"
+      type: Accepted
+    - message: Resolved all the Object references for the Route
+      reason: ResolvedRefs
+      status: "True"
+      type: ResolvedRefs
+    controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    parentRef:
+      group: gateway.networking.k8s.io
+      kind: Gateway
+      name: kserve-ingress-gateway
+      namespace: kserve
+```
+
 ## Remaining Work
 
 ### 1. End-to-end traffic verification
