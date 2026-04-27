@@ -224,6 +224,9 @@ func createRawPredictorHTTPRoute(isvc *v1beta1.InferenceService, ingressConfig *
 			},
 		},
 	}
+	if len(isvc.Spec.Canary) > 0 {
+		applyCanaryWeights(isvc, &httpRoute)
+	}
 	return &httpRoute, nil
 }
 
@@ -494,7 +497,61 @@ func createRawTopLevelHTTPRoute(isvc *v1beta1.InferenceService, ingressConfig *v
 			},
 		},
 	}
+	if len(isvc.Spec.Canary) > 0 {
+		applyCanaryWeights(isvc, &httpRoute)
+	}
 	return &httpRoute, nil
+}
+
+// applyCanaryWeights modifies the HTTPRoute's backend refs to include weighted
+// backends for canary traffic splitting. The primary predictor gets the remaining
+// weight after all canary percentages are subtracted.
+func applyCanaryWeights(isvc *v1beta1.InferenceService, httpRoute *gwapiv1.HTTPRoute) {
+	var totalCanaryPercent int32
+	for _, canary := range isvc.Spec.Canary {
+		totalCanaryPercent += canary.TrafficPercent
+	}
+	stableWeight := int32(100) - totalCanaryPercent
+
+	for i := range httpRoute.Spec.Rules {
+		rule := &httpRoute.Spec.Rules[i]
+		if len(rule.BackendRefs) == 0 {
+			continue
+		}
+
+		template := rule.BackendRefs[0]
+		var weightedBackends []gwapiv1.HTTPBackendRef
+
+		// Stable backend
+		sw := stableWeight
+		stable := gwapiv1.HTTPBackendRef{
+			BackendRef: gwapiv1.BackendRef{
+				BackendObjectReference: template.BackendObjectReference,
+				Weight:                 &sw,
+			},
+		}
+		weightedBackends = append(weightedBackends, stable)
+
+		// Canary backends
+		for _, canary := range isvc.Spec.Canary {
+			canaryServiceName := fmt.Sprintf("%s-%s-predictor", isvc.Name, canary.Name)
+			cw := canary.TrafficPercent
+			backend := gwapiv1.HTTPBackendRef{
+				BackendRef: gwapiv1.BackendRef{
+					BackendObjectReference: gwapiv1.BackendObjectReference{
+						Kind:      template.Kind,
+						Name:      gwapiv1.ObjectName(canaryServiceName),
+						Namespace: template.Namespace,
+						Port:      template.Port,
+					},
+					Weight: &cw,
+				},
+			}
+			weightedBackends = append(weightedBackends, backend)
+		}
+
+		rule.BackendRefs = weightedBackends
+	}
 }
 
 func semanticHttpRouteEquals(desired, existing *gwapiv1.HTTPRoute) bool {

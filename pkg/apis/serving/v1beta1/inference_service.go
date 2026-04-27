@@ -33,6 +33,32 @@ type InferenceServiceSpec struct {
 	// transformer service calls to predictor service.
 	// +optional
 	Transformer *TransformerSpec `json:"transformer,omitempty"`
+	// Canary defines one or more canary deployments with different model versions
+	// and controlled traffic percentages for A/B testing or progressive rollouts.
+	// +optional
+	// +listType=atomic
+	Canary []CanarySpec `json:"canary,omitempty"`
+}
+
+// CanarySpec defines a canary deployment variant with its own model, traffic
+// percentage, and optional replica count.
+type CanarySpec struct {
+	// Name identifies this canary variant. Used as a suffix for the canary
+	// deployment and service names.
+	// +required
+	Name string `json:"name"`
+	// Model spec for the canary variant. The serving runtime is inherited
+	// from the parent predictor.
+	// +required
+	Model ModelSpec `json:"model"`
+	// TrafficPercent is the percentage of traffic routed to this canary.
+	// +required
+	TrafficPercent int32 `json:"trafficPercent"`
+	// MinReplicas for the canary deployment. If set, this count is subtracted
+	// from the stable predictor's minReplicas to maintain a constant replica
+	// budget. If unset, replicas are derived from trafficPercent.
+	// +optional
+	MinReplicas *int32 `json:"minReplicas,omitempty"`
 }
 
 // StorageSpec defines a spec for an object in an object store

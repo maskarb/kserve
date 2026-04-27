@@ -204,6 +204,12 @@ func (p *Predictor) Reconcile(ctx context.Context, isvc *v1beta1.InferenceServic
 			isvc.Status.PropagateRawStatusWithMessages(v1beta1.PredictorComponent, "ReconcileFailed", err.Error(), corev1.ConditionFalse)
 			return ctrl.Result{}, err
 		}
+		// Reconcile canary deployments
+		if len(isvc.Spec.Canary) > 0 {
+			if err := p.reconcileCanaryDeployments(ctx, isvc, sRuntime, annotations, predictorAnnotations); err != nil {
+				return ctrl.Result{}, errors.Wrapf(err, "fails to reconcile canary deployments")
+			}
+		}
 	} else {
 		var err error
 		podLabelKey = constants.RevisionLabel
@@ -822,4 +828,68 @@ func (p *Predictor) reconcileKnativeDeployment(ctx context.Context, isvc *v1beta
 		isvc.Status.PropagateStatus(v1beta1.PredictorComponent, kstatus)
 	}
 	return kstatus, nil
+}
+
+func (p *Predictor) reconcileCanaryDeployments(ctx context.Context, isvc *v1beta1.InferenceService,
+	sRuntime v1alpha1.ServingRuntimeSpec, annotations, predictorAnnotations map[string]string,
+) error {
+	for _, canary := range isvc.Spec.Canary {
+		canaryPodSpec, err := p.buildPodSpec(isvc, sRuntime)
+		if err != nil {
+			return errors.Wrapf(err, "fails to build canary pod spec for %s", canary.Name)
+		}
+
+		// Override model_name to match the primary ISVC name
+		for i := range canaryPodSpec.Containers {
+			if canaryPodSpec.Containers[i].Name == constants.InferenceServiceContainerName {
+				for j := range canaryPodSpec.Containers[i].Args {
+					if strings.HasPrefix(canaryPodSpec.Containers[i].Args[j], "--model_name") {
+						canaryPodSpec.Containers[i].Args[j] = fmt.Sprintf("--model_name=%s", isvc.Name)
+					}
+				}
+			}
+		}
+
+		canaryName := fmt.Sprintf("%s-%s-predictor", isvc.Name, canary.Name)
+		canaryMeta := metav1.ObjectMeta{
+			Name:      canaryName,
+			Namespace: isvc.Namespace,
+			Labels: map[string]string{
+				constants.RawDeploymentAppLabel:       canaryName,
+				"serving.kserve.io/inferenceservice":  isvc.Name,
+				"component":                           "predictor",
+			},
+			Annotations: make(map[string]string),
+		}
+
+		if canary.Model.StorageURI != nil {
+			canaryMeta.Annotations[constants.StorageInitializerSourceUriInternalAnnotationKey] = *canary.Model.StorageURI
+			canaryMeta.Annotations["internal.serving.kserve.io/storage-initializer"] = "true"
+		}
+
+		componentExt := isvc.Spec.Predictor.ComponentExtensionSpec
+		if canary.MinReplicas != nil {
+			componentExt.MinReplicas = canary.MinReplicas
+		}
+
+		r, err := raw.NewRawKubeReconciler(ctx, p.client, p.clientset, p.scheme, canaryMeta, metav1.ObjectMeta{},
+			&componentExt, &canaryPodSpec, nil,
+			&isvc.Spec.Predictor.StorageUris, nil, nil, nil, nil)
+		if err != nil {
+			return errors.Wrapf(err, "fails to create canary reconciler for %s", canary.Name)
+		}
+
+		if err := r.Workload.SetControllerReferences(isvc, p.scheme); err != nil {
+			return errors.Wrapf(err, "fails to set canary workload owner reference for %s", canary.Name)
+		}
+		if err := r.Service.SetControllerReferences(isvc, p.scheme); err != nil {
+			return errors.Wrapf(err, "fails to set canary service owner reference for %s", canary.Name)
+		}
+
+		if _, err := r.Reconcile(ctx); err != nil {
+			return errors.Wrapf(err, "fails to reconcile canary %s", canary.Name)
+		}
+		p.Log.Info("Reconciled canary deployment", "canary", canary.Name, "trafficPercent", canary.TrafficPercent)
+	}
+	return nil
 }
