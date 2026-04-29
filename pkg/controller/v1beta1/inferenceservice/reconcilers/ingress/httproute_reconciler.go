@@ -555,9 +555,22 @@ func applyCanaryWeights(isvc *v1beta1.InferenceService, httpRoute *gwapiv1.HTTPR
 }
 
 func semanticHttpRouteEquals(desired, existing *gwapiv1.HTTPRoute) bool {
-	return equality.Semantic.DeepDerivative(desired.Spec, existing.Spec) &&
-		equality.Semantic.DeepDerivative(desired.Labels, existing.Labels) &&
-		equality.Semantic.DeepDerivative(desired.Annotations, existing.Annotations)
+	if !equality.Semantic.DeepDerivative(desired.Labels, existing.Labels) ||
+		!equality.Semantic.DeepDerivative(desired.Annotations, existing.Annotations) {
+		return false
+	}
+	// DeepDerivative treats missing fields as matching, so a single unweighted
+	// backend is seen as a subset of two weighted backends. Compare backend ref
+	// counts explicitly to detect canary addition/removal.
+	if len(desired.Spec.Rules) != len(existing.Spec.Rules) {
+		return false
+	}
+	for i := range desired.Spec.Rules {
+		if len(desired.Spec.Rules[i].BackendRefs) != len(existing.Spec.Rules[i].BackendRefs) {
+			return false
+		}
+	}
+	return equality.Semantic.DeepDerivative(desired.Spec, existing.Spec)
 }
 
 // isHTTPRouteReady checks if the HTTPRoute is ready. If not, returns the reason and message.

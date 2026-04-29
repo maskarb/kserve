@@ -25,6 +25,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -204,11 +205,9 @@ func (p *Predictor) Reconcile(ctx context.Context, isvc *v1beta1.InferenceServic
 			isvc.Status.PropagateRawStatusWithMessages(v1beta1.PredictorComponent, "ReconcileFailed", err.Error(), corev1.ConditionFalse)
 			return ctrl.Result{}, err
 		}
-		// Reconcile canary deployments
-		if len(isvc.Spec.Canary) > 0 {
-			if err := p.reconcileCanaryDeployments(ctx, isvc, sRuntime, annotations, predictorAnnotations); err != nil {
-				return ctrl.Result{}, errors.Wrapf(err, "fails to reconcile canary deployments")
-			}
+		// Reconcile canary deployments (also cleans up orphans when canary array shrinks)
+		if err := p.reconcileCanaryDeployments(ctx, isvc, sRuntime, annotations, predictorAnnotations); err != nil {
+			return ctrl.Result{}, errors.Wrapf(err, "fails to reconcile canary deployments")
 		}
 	} else {
 		var err error
@@ -891,5 +890,55 @@ func (p *Predictor) reconcileCanaryDeployments(ctx context.Context, isvc *v1beta
 		}
 		p.Log.Info("Reconciled canary deployment", "canary", canary.Name, "trafficPercent", canary.TrafficPercent)
 	}
+
+	// Clean up orphaned canary deployments and services that are no longer in the spec
+	expectedCanaries := make(map[string]bool)
+	stableName := fmt.Sprintf("%s-predictor", isvc.Name)
+	for _, canary := range isvc.Spec.Canary {
+		expectedCanaries[fmt.Sprintf("%s-%s-predictor", isvc.Name, canary.Name)] = true
+	}
+
+	deployList := &appsv1.DeploymentList{}
+	if err := p.client.List(ctx, deployList, client.InNamespace(isvc.Namespace), client.MatchingLabels{
+		"serving.kserve.io/inferenceservice": isvc.Name,
+		"component":                          "predictor",
+	}); err != nil {
+		return errors.Wrapf(err, "fails to list canary deployments for cleanup")
+	}
+
+	for i := range deployList.Items {
+		deploy := &deployList.Items[i]
+		if deploy.Name == stableName {
+			continue
+		}
+		if !expectedCanaries[deploy.Name] {
+			p.Log.Info("Deleting orphaned canary deployment", "name", deploy.Name)
+			if err := p.client.Delete(ctx, deploy); err != nil {
+				return errors.Wrapf(err, "fails to delete orphaned canary deployment %s", deploy.Name)
+			}
+		}
+	}
+
+	svcList := &corev1.ServiceList{}
+	if err := p.client.List(ctx, svcList, client.InNamespace(isvc.Namespace), client.MatchingLabels{
+		"serving.kserve.io/inferenceservice": isvc.Name,
+		"component":                          "predictor",
+	}); err != nil {
+		return errors.Wrapf(err, "fails to list canary services for cleanup")
+	}
+
+	for i := range svcList.Items {
+		svc := &svcList.Items[i]
+		if svc.Name == stableName {
+			continue
+		}
+		if !expectedCanaries[svc.Name] {
+			p.Log.Info("Deleting orphaned canary service", "name", svc.Name)
+			if err := p.client.Delete(ctx, svc); err != nil {
+				return errors.Wrapf(err, "fails to delete orphaned canary service %s", svc.Name)
+			}
+		}
+	}
+
 	return nil
 }
