@@ -748,7 +748,24 @@ func (p *Predictor) reconcileRawDeployment(ctx context.Context, isvc *v1beta1.In
 		storageSpec = &modelStorageSpec.StorageSpec
 	}
 
-	r, err := raw.NewRawKubeReconciler(ctx, p.client, p.clientset, p.scheme, objectMeta, workerObjectMeta, &isvc.Spec.Predictor.ComponentExtensionSpec,
+	// Copy the extension spec so we can adjust minReplicas for canary without
+	// mutating the ISVC object.
+	componentExt := *isvc.Spec.Predictor.GetExtensions()
+	if len(isvc.Spec.Canary) > 0 && componentExt.MinReplicas != nil {
+		var canaryReplicas int32
+		for _, canary := range isvc.Spec.Canary {
+			if canary.MinReplicas != nil {
+				canaryReplicas += *canary.MinReplicas
+			}
+		}
+		adjustedMin := *componentExt.MinReplicas - canaryReplicas
+		if adjustedMin < 0 {
+			adjustedMin = 0
+		}
+		componentExt.MinReplicas = &adjustedMin
+	}
+
+	r, err := raw.NewRawKubeReconciler(ctx, p.client, p.clientset, p.scheme, objectMeta, workerObjectMeta, &componentExt,
 		podSpec, workerPodSpec, &isvc.Spec.Predictor.StorageUris, storageInitializerConfig, storageSpec, credentialBuilder, storageContainerSpec)
 	if err != nil {
 		return errors.Wrapf(err, "fails to create NewRawKubeReconciler for predictor")

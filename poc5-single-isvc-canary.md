@@ -5,15 +5,15 @@
 This POC implements canary rollout for InferenceService in RawDeployment mode
 using a single ISVC with an embedded `canary` array. Based on the
 [upstream maintainer proposal](https://github.com/kserve/kserve/issues/5335#issuecomment-4320814724),
-each canary entry defines a name, predictor spec, and traffic percentage. The
+each canary entry defines a name, model spec, traffic percentage, and optional
+replica count. The
 controller creates canary deployments within the same ISVC, all serving under
 the same model name. Traffic is split via Gateway API HTTPRoute weighted
-backends (upstream) and OpenShift Route `alternateBackends` (omc/downstream).
+backends.
 
-## Branches
+## Branch
 
-- KServe: [maskarb/kserve:canary-single-isvc-poc](https://github.com/maskarb/kserve/compare/canary-single-isvc-poc) (179 lines, 4 files)
-- omc: [maskarb/odh-model-controller:canary-single-isvc-omc](https://github.com/maskarb/odh-model-controller/compare/canary-single-isvc-omc) (53 lines in Route reconciler)
+- [maskarb/kserve:canary-single-isvc-poc](https://github.com/maskarb/kserve/compare/canary-single-isvc-poc) (179 lines, 4 files)
 
 ## What Was Implemented
 
@@ -30,9 +30,10 @@ type InferenceServiceSpec struct {
 }
 
 type CanarySpec struct {
-    Name           string        `json:"name"`
-    Predictor      PredictorSpec `json:"predictor"`
-    TrafficPercent int32         `json:"trafficPercent"`
+    Name           string    `json:"name"`
+    Model          ModelSpec `json:"model"`
+    TrafficPercent int32     `json:"trafficPercent"`
+    MinReplicas    *int32    `json:"minReplicas,omitempty"`
 }
 ```
 
@@ -70,22 +71,6 @@ For each rule:
 3. Adds a weighted backend for each canary entry using the naming convention
    `{isvc-name}-{canary-name}-predictor`
 
-### 4. omc Route Reconciler (`internal/controller/serving/reconcilers/kserve_raw_route_reconciler.go`)
-
-Added `applyCanaryTrafficSplits()` method on the existing `KserveRawRouteReconciler`.
-When `isvc.Spec.Canary` has entries:
-
-1. Calculates stable weight as `100 - sum(canary percentages)`
-2. Sets `route.Spec.To.Weight` to the stable weight
-3. Verifies each canary service exists via client lookup
-4. Adds each canary service as an `alternateBackend` with its traffic percentage
-5. Resolves `targetPort` to numeric (container port 8080) so HAProxy can route
-   to all backends — each service uses a different named port, but the container
-   port is the same
-
-Also updated `route_comparator.go` to include `AlternateBackends` in the
-comparison so changes to traffic splits trigger Route updates.
-
 ## User Workflow
 
 ### Initiate Canary
@@ -103,11 +88,10 @@ spec:
       storageUri: "gs://kfserving-examples/models/sklearn/1.0/model"
   canary:
     - name: v2
-      predictor:
-        model:
-          modelFormat:
-            name: sklearn
-          storageUri: "gs://kfserving-examples/models/sklearn/2.0/model"
+      model:
+        modelFormat:
+          name: sklearn
+        storageUri: "gs://kfserving-examples/models/sklearn/2.0/model"
       trafficPercent: 20
 ```
 
@@ -120,11 +104,10 @@ Update `trafficPercent` to 50:
 ```yaml
   canary:
     - name: v2
-      predictor:
-        model:
-          modelFormat:
-            name: sklearn
-          storageUri: "gs://kfserving-examples/models/sklearn/2.0/model"
+      model:
+        modelFormat:
+          name: sklearn
+        storageUri: "gs://kfserving-examples/models/sklearn/2.0/model"
       trafficPercent: 50
 ```
 
@@ -135,18 +118,16 @@ The controller updates HTTPRoute weights immediately. No pod restart needed.
 ```yaml
   canary:
     - name: v2
-      predictor:
-        model:
-          modelFormat:
-            name: sklearn
-          storageUri: "gs://models/v2"
+      model:
+        modelFormat:
+          name: sklearn
+        storageUri: "gs://models/v2"
       trafficPercent: 10
     - name: v3
-      predictor:
-        model:
-          modelFormat:
-            name: sklearn
-          storageUri: "gs://models/v3"
+      model:
+        modelFormat:
+          name: sklearn
+        storageUri: "gs://models/v3"
       trafficPercent: 10
 ```
 
@@ -200,9 +181,8 @@ spec:
     minReplicas: 4
   canary:
     - name: v2
-      predictor:
-        model:
-          storageUri: "hf://meta-llama/Llama-3.1-8B"
+      model:
+        storageUri: "hf://meta-llama/Llama-3.1-8B"
       trafficPercent: 25
 ```
 
@@ -226,8 +206,9 @@ spec:
     minReplicas: 4        # total budget
   canary:
     - name: v2
-      predictor:
-        minReplicas: 1    # explicit: take 1 from the total
+      model:
+        storageUri: "hf://meta-llama/Llama-3.1-8B"
+      minReplicas: 1      # explicit: take 1 from the total
       trafficPercent: 20
 ```
 
@@ -332,32 +313,16 @@ stable and canary. This is complex and likely a follow-up.
 
 ## Canary Spec Scope
 
-The POC uses the full `PredictorSpec` for the canary, which means users could
-configure autoscaling, batching, logging, timeouts, deployment strategy, labels,
-and annotations on the canary. Most of these don't make sense for a canary
-variant and could lead to confusing behavior (e.g., an HPA on the canary
-fighting the controller's replica management).
-
-A production implementation should use a narrower spec that only exposes what's
-actually supported:
-
-```go
-type CanarySpec struct {
-    Name           string     `json:"name"`
-    Model          ModelSpec  `json:"model"`
-    MinReplicas    *int32     `json:"minReplicas,omitempty"`
-    TrafficPercent int32      `json:"trafficPercent"`
-}
-```
-
-Everything else — autoscaling, batching, logging, timeouts, deployment strategy,
-container resources, service account — should be inherited from the stable
-predictor. This makes it clear that a canary is a model variant, not an
-independent deployment with its own operational configuration.
+The `CanarySpec` uses a narrow API surface — `Model`, `TrafficPercent`, and
+optional `MinReplicas` — rather than embedding the full `PredictorSpec`.
+Autoscaling, batching, logging, timeouts, deployment strategy, and other
+operational config is inherited from the stable predictor. This makes it clear
+that a canary is a model variant, not an independent deployment with its own
+operational configuration.
 
 If the canary needs different container resources (e.g., a larger model version
-requiring more memory), a `resources` field could be added. But autoscaling,
-batching, and logging should not be configurable per-canary.
+requiring more memory), a `resources` field could be added in the future. But
+autoscaling, batching, and logging should not be configurable per-canary.
 
 ## Demonstration Results
 
@@ -383,16 +348,6 @@ Total: 466
 HTTPRoute weights updated immediately upon ISVC spec change — no pod restart,
 no downtime.
 
-### CRC Cluster (OpenShift Routes, omc)
-
-Not tested with this POC. The omc branch (`canary-single-isvc-omc`) was built
-and compiles cleanly, but the CRC testing in this session used the Option 4
-cross-ISVC `router.route.splits` approach instead. That test validated the omc
-Route reconciler mechanics (alternateBackends, numeric targetPort) with 500
-requests showing exact 80/20 distribution on OpenShift 4.21. The same omc
-reconciler pattern applies here — the only difference is reading from
-`isvc.Spec.Canary` instead of `isvc.Spec.Router.Route.Splits`.
-
 ## Key Design Decisions
 
 ### Model Name Override
@@ -414,14 +369,6 @@ The canary deployment sets the annotation
 and injects the storage initializer init container. This is the same mechanism
 used for the stable predictor.
 
-### OpenShift Route targetPort
-
-When using `alternateBackends` on OpenShift Routes, the single `targetPort` must
-resolve on all backends. Each predictor service names its port differently
-(e.g., `sklearn-predictor` vs `sklearn-v2-predictor`), so a named port only
-matches the primary service. The omc reconciler resolves to the numeric container
-port (8080) when canary splits are configured.
-
 ### HTTPRoute Weight Calculation
 
 Stable weight is computed as `100 - sum(canary percentages)`. If a user
@@ -430,53 +377,23 @@ POC. The real implementation needs a validating webhook.
 
 ## What Is Missing
 
-### 1. Canary Resource Cleanup on Promotion/Rollback
-
-When the `canary` array is removed from the ISVC spec, the controller does not
-delete the orphaned canary deployments and services. They remain in the cluster
-with their owner reference pointing back to the ISVC, so they will be garbage
-collected when the ISVC itself is deleted — but they won't be cleaned up on
-promotion or rollback.
-
-**Fix:** The predictor reconciler needs to list existing canary deployments
-(by label `serving.kserve.io/inferenceservice={name}` and
-`component=predictor`), compare against the current `canary` array, and delete
-any that are no longer referenced.
-
-### 2. HTTPRoute Cleanup on Promotion/Rollback
-
-When the `canary` array is removed, the desired HTTPRoute is built with a
-single unweighted backend. However, the `semanticHttpRouteEquals` comparator
-uses `DeepDerivative`, which treats missing fields as matching. This means the
-desired (single backend, no weight) is seen as a subset of the existing (two
-backends with weights), and no update is triggered.
-
-**Fix:** The comparator needs to use `DeepEqual` instead of `DeepDerivative`
-for the `Rules` field, or the HTTPRoute reconciler needs explicit logic to
-detect and remove stale backends.
-
-### 3. Constant GPU Budget (Replica Scaling)
-
-The upstream proposal describes scaling down stable replicas as canary replicas
-scale up, keeping total GPU usage constant. This POC does not implement replica
-management — both stable and canary run at their configured replica counts
-independently.
-
-**Fix:** When canary is configured, the controller should adjust stable
-`replicas` to `totalReplicas - sum(canary replicas)`. This interacts with
-autoscaling and needs careful design.
-
-### 4. Validation Webhooks
+### 1. Validation Webhooks
 
 No validation is performed on the `canary` spec. The real implementation needs:
 
 - Canary `trafficPercent` values must be positive and sum to less than 100
+- `sum(canary[*].minReplicas) < stable.minReplicas` — the total canary
+  replicas must be strictly less than the stable's `minReplicas` to guarantee
+  at least 1 stable replica is always running. Without this, a user could set
+  canary replicas equal to the budget, leaving stable at 0 with no fallback.
+  This was observed in testing: setting stable `minReplicas: 2` and canary
+  `minReplicas: 2` results in an adjusted stable of 0, which is unsafe.
 - Canary `name` must be unique within the array
 - Canary `name` must be a valid DNS label (used in deployment/service names)
 - Canary predictor must specify a model (no empty specs)
 - Canary should not be allowed with Knative deployment mode
 
-### 5. Status Reporting
+### 2. Status Reporting
 
 The ISVC status does not report canary-specific information. The real
 implementation should add:
@@ -488,7 +405,7 @@ implementation should add:
 The existing `LatestRolledoutRevision` and `PreviousRolledoutRevision` status
 fields could potentially be reused for canary tracking.
 
-### 6. Transformer/Explainer Canary
+### 3. Transformer/Explainer Canary
 
 This POC only handles predictor canary. If an ISVC has a transformer or
 explainer, the canary should also create corresponding transformer/explainer
@@ -497,22 +414,21 @@ top-level HTTPRoute routes to transformer (if present), and the transformer
 routes to the predictor. Canary traffic splitting would need to be applied at
 the transformer level as well.
 
-### 7. Session Affinity
+### 4. Session Affinity
 
 With per-request weighted routing, a user's requests may alternate between
 stable and canary across turns in a conversation. For LLM use cases, this can
 produce inconsistent behavior. Gateway API's `sessionPersistence` (experimental,
 on HTTPRouteRule) could pin users to a version. This is a follow-up concern.
 
-### 8. Canary-Specific Serving Runtime
+### 5. Canary-Specific Serving Runtime
 
 The POC inherits the serving runtime from the stable predictor. If the canary
-needs a different runtime (e.g., a newer version of vLLM), the canary spec
-would need to support runtime selection independently. The current `CanarySpec`
-includes the full `PredictorSpec`, so this is structurally possible but not
-tested.
+needs a different runtime (e.g., a newer version of vLLM), the `CanarySpec`
+would need a `runtime` field. Currently only `Model` is exposed, so runtime
+selection is not independently configurable per-canary.
 
-### 9. Metrics and Observability
+### 6. Metrics and Observability
 
 Both stable and canary deployments are independently monitorable via existing
 Prometheus metrics (each pod reports its own metrics). However, there is no
@@ -520,17 +436,7 @@ built-in way to compare canary vs stable performance side-by-side. A follow-up
 could add canary-specific labels to ServiceMonitor/PodMonitor resources for
 easier dashboard filtering.
 
-### 10. OpenShift Route Cookie-Based Splitting
-
-OpenShift Routes use sticky session cookies by default. For canary testing where
-each request should be independently routed by weight, the Route may need
-`haproxy.router.openshift.io/disable_cookies: "true"` and
-`haproxy.router.openshift.io/balance: roundrobin` annotations. The POC does not
-set these — in testing on CRC, traffic was distributed correctly without them
-because `curl` does not send cookies. Browser-based clients would need these
-annotations to avoid sticky routing.
-
-### 11. Multi-Container Pod Support
+### 7. Multi-Container Pod Support
 
 The model name override logic iterates over container args looking for
 `--model_name` prefixes. This assumes a single inference container. If the pod
@@ -540,8 +446,5 @@ the override logic needs to be more targeted.
 ## References
 
 - Upstream maintainer proposal: [kserve#5335 comment](https://github.com/kserve/kserve/issues/5335#issuecomment-4320814724)
-- Design decision: [RHOAIENG-56732](https://redhat.atlassian.net/browse/RHOAIENG-56732)
-- Epic: [RHOAIENG-56574](https://redhat.atlassian.net/browse/RHOAIENG-56574)
-- POC task: [RHOAIENG-60256](https://redhat.atlassian.net/browse/RHOAIENG-60256)
 - Upstream issues: [kserve#4074](https://github.com/kserve/kserve/issues/4074), [kserve#2649](https://github.com/kserve/kserve/issues/2649), [kserve#1324](https://github.com/kserve/kserve/issues/1324)
 - RFE: [RHAIRFE-78](https://issues.redhat.com/browse/RHAIRFE-78)
