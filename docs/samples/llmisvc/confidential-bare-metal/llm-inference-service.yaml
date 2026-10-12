@@ -1,0 +1,35 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: confidential-llm
+  namespace: confidential-model-serving
+spec:
+  baseRefs:
+    # Replace with the installed versioned name in the RHOAI applications namespace.
+    - name: kserve-config-llm-confidential-bare-metal
+  annotations:
+    io.katacontainers.config.hypervisor.default_memory: "57344"
+    io.katacontainers.config.hypervisor.default_vcpus: "8"
+    io.katacontainers.config.hypervisor.kernel_params: agent.launch_process_timeout=90
+    io.katacontainers.config.hypervisor.cc_init_data: "<ENCODED-INITDATA>"
+  template:
+    containers:
+      - name: main
+        resources:
+          requests:
+            cpu: "8"
+            memory: 58Gi
+            nvidia.com/pgpu: "1"
+          limits:
+            cpu: "8"
+            memory: 58Gi
+            nvidia.com/pgpu: "1"
+  model:
+    uri: hf://<ORG>/<ENCRYPTED-MODEL>
+    confidential:
+      enabled: true
+      resourceId: kbs:///default/model-key/key
+  router:
+    route: {}
+    gateway: {}
+    scheduler: {}

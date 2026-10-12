@@ -75,6 +75,37 @@ replacements:
 - source:
     kind: ConfigMap
     name: kserve-parameters
+    fieldPath: data.osc-storage-helper
+  targets:
+  - select:
+      kind: LLMInferenceServiceConfig
+      name: kserve-config-llm-confidential-bare-metal
+    fieldPaths:
+    - spec.template.initContainers.[name=format-disk].image
+    - spec.template.initContainers.[name=check-ready].image
+- source:
+    kind: ConfigMap
+    name: kserve-parameters
+    fieldPath: data.kserve-storage-initializer
+  targets:
+  - select:
+      kind: LLMInferenceServiceConfig
+      name: kserve-config-llm-confidential-bare-metal
+    fieldPaths:
+    - spec.template.initContainers.[name=storage-initializer].image
+- source:
+    kind: ConfigMap
+    name: kserve-parameters
+    fieldPath: data.kserve-llm-d-nvidia-cuda
+  targets:
+  - select:
+      kind: LLMInferenceServiceConfig
+      name: kserve-config-llm-confidential-bare-metal
+    fieldPaths:
+    - spec.template.containers.[name=main].image
+- source:
+    kind: ConfigMap
+    name: kserve-parameters
     fieldPath: data.kserve-controller
   targets:
   - select:

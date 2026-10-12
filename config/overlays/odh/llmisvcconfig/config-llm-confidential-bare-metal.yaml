@@ -1,0 +1,164 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-confidential-bare-metal
+  annotations:
+    openshift.io/display-name: Confidential LLM serving on bare metal
+    openshift.io/description: Single-node NVIDIA GPU serving with OSC CoCo and a LUKS block volume on bare-metal OpenShift nodes.
+    opendatahub.io/recommended-accelerators: '["nvidia.com/pgpu"]'
+    opendatahub.io/supported-topologies: '["workload-single-node"]'
+spec:
+  annotations:
+    io.katacontainers.config.runtime.create_container_timeout: "900"
+  replicas: 1
+  # A replacement must wait for the previous pod to release its block device.
+  rolloutStrategy:
+    maxSurge: 0
+    maxUnavailable: 1
+  template:
+    runtimeClassName: kata-cc-nvidia-gpu
+    serviceAccountName: coco-cc-storage
+    shareProcessNamespace: true
+    containers:
+      - name: main
+        image: placeholder
+        env:
+          - name: DATA_DIR
+            value: /mnt/models
+          # The inherited Bash launcher sources this before starting vLLM.
+          - name: BASH_ENV
+            value: /opt/cc-storage/link.sh
+          - name: LD_LIBRARY_PATH
+            value: /usr/lib64
+          - name: LD_PRELOAD
+            value: /usr/lib64/libcuda.so.1
+          - name: VLLM_USE_V2_MODEL_RUNNER
+            value: "0"
+        securityContext:
+          privileged: true
+          allowPrivilegeEscalation: true
+          runAsNonRoot: false
+          runAsUser: 0
+          readOnlyRootFilesystem: false
+          seccompProfile:
+            type: Unconfined
+        volumeMounts:
+          - name: cc-storage-link
+            mountPath: /opt/cc-storage
+            readOnly: true
+    volumes:
+      - name: luks-block
+        persistentVolumeClaim:
+          claimName: '{{ ChildName .ObjectMeta.Name `-encrypted-model` }}'
+      # Reuse the base template's /dev/shm volume for the helper's PID file.
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
+      - name: cc-storage-link
+        configMap:
+          name: cc-storage-link
+      # Scratch paths stay in guest memory; weights stay on the LUKS device.
+      - name: home
+        emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
+      - name: model-cache
+        emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
+      - name: tmp-dir
+        emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
+    initContainers:
+      - name: format-disk
+        image: placeholder
+        command: ["/bin/bash", "/opt/cc-storage/format-disk.sh"]
+        restartPolicy: Always
+        securityContext:
+          privileged: true
+          allowPrivilegeEscalation: true
+          runAsNonRoot: false
+          runAsUser: 0
+        env:
+          - name: LUKS_RESOURCE_ID
+            value: kbs:///default/luks-password/key
+          - name: PASS
+            valueFrom:
+              secretKeyRef:
+                name: luks-sealed
+                key: key
+        volumeMounts:
+          - name: cc-storage-link
+            mountPath: /opt/cc-storage
+            readOnly: true
+          - name: dshm
+            mountPath: /dev/shm
+        volumeDevices:
+          - name: luks-block
+            devicePath: /dev/block-device
+      - name: check-ready
+        image: placeholder
+        command: ["/usr/local/bin/luks-helper", "wait-ready"]
+        securityContext:
+          privileged: true
+          allowPrivilegeEscalation: true
+          runAsNonRoot: false
+          runAsUser: 0
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+      - name: storage-initializer
+        image: placeholder
+        securityContext:
+          privileged: true
+          allowPrivilegeEscalation: true
+          runAsNonRoot: false
+          runAsUser: 0
+          readOnlyRootFilesystem: false
+        envFrom:
+          - secretRef:
+              name: model-download-credentials
+        env:
+          - name: DATA_DIR
+            value: /mnt/models
+          - name: CONFIDENTIAL_ENABLED
+            value: '{{ if and .Spec.Model.Confidential .Spec.Model.Confidential.Enabled }}true{{ else }}false{{ end }}'
+          - name: CONFIDENTIAL_RESOURCE_ID
+            value: '{{ if .Spec.Model.Confidential }}{{ if .Spec.Model.Confidential.ResourceId }}{{ .Spec.Model.Confidential.ResourceId }}{{ end }}{{ end }}'
+        volumeMounts:
+          - name: cc-storage-link
+            mountPath: /opt/cc-storage
+            readOnly: true
+          - name: dshm
+            mountPath: /dev/shm
+        command:
+          - /bin/sh
+          - -c
+          - |
+            set -eu
+            if [ "${CONFIDENTIAL_ENABLED:-}" != "true" ] || [ -z "${CONFIDENTIAL_RESOURCE_ID:-}" ]; then
+              echo "cc-storage: spec.model.confidential.enabled and resourceId are required" >&2
+              exit 1
+            fi
+            . /opt/cc-storage/link.sh
+            export TMPDIR="${DATA_DIR}"
+            export HOME="${DATA_DIR}"
+            export HF_HOME="${DATA_DIR}"
+            export HF_HUB_CACHE="${DATA_DIR}"
+            exec /storage-initializer/scripts/initializer-entrypoint "$@"
+          - initializer-entrypoint
+        args:
+          - '{{ .Spec.Model.URI.String }}'
+          - /mnt/models
+        resources:
+          requests:
+            cpu: "1"
+            memory: 2Gi
+          limits:
+            cpu: "4"
+            memory: 8Gi
+  # Automatic injection overwrites the wrapper and mounts over its symlink.
+  storageInitializer:
+    enabled: false
